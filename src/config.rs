@@ -1,4 +1,4 @@
-use crate::{Effort, LlmError};
+use crate::{Effort, AgentError};
 use std::env;
 
 #[derive(Clone)]
@@ -7,19 +7,18 @@ pub struct Config {
     pub endpoint: String,
     pub model: String,
     pub reasoning: Effort,
-    pub system_prompt: String,
 }
 
 impl Config {
-    pub fn new() -> Result<Config, LlmError> {
+    pub fn new() -> Result<Config, AgentError> {
         let api_key = env::var("MINIMAL_AGENT_API_KEY")
-            .map_err(|e| LlmError(format!("MINIMAL_AGENT_API_KEY: {e}")))?;
+            .map_err(|e| AgentError(format!("MINIMAL_AGENT_API_KEY: {e}")))?;
 
         let endpoint = env::var("MINIMAL_AGENT_BASE_URL")
-            .map_err(|e| LlmError(format!("MINIMAL_AGENT_BASE_URL: {e}")))?;
+            .map_err(|e| AgentError(format!("MINIMAL_AGENT_BASE_URL: {e}")))?;
 
         let model = env::var("MINIMAL_AGENT_MODEL")
-            .map_err(|e| LlmError(format!("MINIMAL_AGENT_MODEL: {e}")))?;
+            .map_err(|e| AgentError(format!("MINIMAL_AGENT_MODEL: {e}")))?;
 
         let reasoning = match env::var("MINIMAL_AGENT_REASONING")
             .unwrap_or_else(|_| "none".into())
@@ -31,13 +30,13 @@ impl Config {
             "high" => Effort::High,
             "max" => Effort::Max,
             other => {
-                return Err(LlmError(format!(
+                return Err(AgentError(format!(
                     "MINIMAL_AGENT_REASONING 取值非法: {other:?}，可选 none/low/high/max"
                 )));
             },
         };
 
-        let system_prompt = "you are a helpful assistant".to_string();
-        Ok(Config { api_key, endpoint, model, reasoning, system_prompt })
+        Ok(Config { api_key, endpoint, model, reasoning, })
     }
 }
+

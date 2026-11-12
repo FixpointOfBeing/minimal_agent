@@ -1,19 +1,20 @@
-use futures_util::StreamExt;
-use owo_colors::OwoColorize;
 use std::path::PathBuf;
 
+use owo_colors::OwoColorize;
+
+use crate::agent_loop::{Context, run_turn};
 use crate::{
-    Config, Input, InputItem, InputMessageContent, LlmClient, LlmError, Payload, Reasoning, Role,
-    StreamEventKind,
+    AgentError, InputItem, InputMessageContent, LlmClient, ReasoningText, Role, TextContentPart,
 };
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
 
-pub async fn repl(config: Config) -> Result<(), LlmError> {
-    let client = LlmClient::new(&config.clone())?;
-    let mut history: Vec<InputItem> = Vec::new();
+pub async fn repl() -> Result<(), AgentError> {
+    let mut ctx = Context::new()?;
 
-    let mut editor = DefaultEditor::new().map_err(|e| LlmError(e.to_string()))?;
+    let client = LlmClient::new(&ctx.config)?;
+
+    let mut editor = DefaultEditor::new().map_err(|e| AgentError::new(e.to_string()))?;
     let repl_history = PathBuf::from(".history");
     let _ = editor.load_history(&repl_history);
 
@@ -28,63 +29,123 @@ pub async fn repl(config: Config) -> Result<(), LlmError> {
                 println!();
                 break;
             },
-            Err(err) => return Err(LlmError(err.to_string())),
+            Err(err) => return Err(AgentError::new(err.to_string())),
         };
 
         let input = line.trim();
         if input.is_empty() {
             continue;
         }
+
         let _ = editor.add_history_entry(input);
+        let _ = editor.save_history(&repl_history);
+
         match input {
             "/exit" | "/quit" => break,
+            "/history" => {
+                let items = &ctx.history.iter().collect::<Vec<&InputItem>>();
+                print_input_items(items);
+                continue;
+            },
+            "/calls" => {
+                let calls_and_outputs = ctx
+                    .history
+                    .iter()
+                    .filter_map(|item| {
+                        if matches!(
+                            item,
+                            InputItem::FunctionCall { .. } | InputItem::FunctionCallOutput { .. }
+                        ) {
+                            Some(item)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<&InputItem>>();
+                print_input_items(&calls_and_outputs);
+                continue;
+            },
             _ => {},
         }
 
-        history.push(InputItem::Message {
+        let checkpoint = ctx.history.len();
+        ctx.history.push(InputItem::Message {
             role: Role::User,
             content: InputMessageContent::Text(input.to_string()),
         });
-        let request = Payload {
-            model: config.model.clone(),
-            instructions: config.system_prompt.clone(),
-            input: Input::Items(history.clone()),
-            reasoning: Reasoning { effort: config.reasoning.clone() },
-            stream: true,
-        };
 
-        let mut stream = client.ask_stream(request).await.map_err(|e| LlmError(e.to_string()))?;
-
-        while let Some(event) = stream.next().await {
-            let event = event?;
-            match event.kind {
-                StreamEventKind::OutputTextDelta => {
-                    if let Some(delta) = event.delta {
-                        print!("{}", delta.fg_rgb::<255, 255, 240>())
-                    }
-                },
-                StreamEventKind::ReasoningTextDelta => {
-                    if let Some(delta) = event.delta {
-                        print!("{}", delta.fg_rgb::<149, 163, 166>())
-                    }
-                },
-                StreamEventKind::OutputItemDone => {
-                    println!("\n");
-                },
-                StreamEventKind::Other(_) => {},
-            }
-
-            match event.response {
-                Some(response) if !response.output.is_empty() => {
-                    for item in response.output {
-                        history.push(item.into());
-                    }
-                },
-                _ => {},
-            };
+        if let Err(e) = run_turn(&client, &mut ctx).await {
+            print_error(&e.0);
+            ctx.history.truncate(checkpoint);
         }
     }
 
-    let _ = editor.save_history(&repl_history);
     Ok(())
+}
+
+fn print_error(msg: &str) {
+    eprintln!("{} {} : {}", "✗".red().bold(), "error".red().bold(), msg);
+}
+
+fn print_input_items(items: &[&InputItem]) {
+    for item in items {
+        let line = format!("{}", item.to_debug_colored());
+        println!("{}", line.bright_black());
+    }
+}
+
+impl InputItem {
+    pub fn to_debug_colored(&self) -> String {
+        match self {
+            InputItem::Message { role, content } => {
+                let role_str = match role {
+                    Role::User => "user".blue().to_string(),
+                    Role::Assistant => "assistant".green().to_string(),
+                    Role::System => "system".yellow().to_string(),
+                };
+                format!("{} {}: {}", "message".bright_black(), role_str, content_colored(content),)
+            },
+            InputItem::Reasoning { content } => {
+                let body = content
+                    .iter()
+                    .map(|r| match r {
+                        ReasoningText::ReasoningText { text } => text.clone(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("{} {}", "reasoning".magenta().dimmed(), body.magenta().dimmed(),)
+            },
+            InputItem::FunctionCall { call_id, name, arguments } => {
+                format!(
+                    "{} {}({}) {}",
+                    "function_call".cyan(),
+                    name.cyan().bold(),
+                    arguments.to_string().dimmed(),
+                    format!("[{call_id}]").bright_black(),
+                )
+            },
+            InputItem::FunctionCallOutput { call_id, output } => {
+                format!(
+                    "{} {} {}",
+                    "function_call_output".bright_black(),
+                    format!("[{call_id}]").bright_black(),
+                    output.dimmed(),
+                )
+            },
+        }
+    }
+}
+
+fn content_colored(content: &InputMessageContent) -> String {
+    match content {
+        InputMessageContent::Text(s) => s.clone(),
+        InputMessageContent::ContentParts(parts) => parts
+            .iter()
+            .map(|p| match p {
+                TextContentPart::InputText { text } => text.clone(),
+                TextContentPart::OutputText { text } => text.dimmed().to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(""),
+    }
 }
