@@ -2,9 +2,11 @@ use std::path::PathBuf;
 
 use owo_colors::OwoColorize;
 
-use crate::agent_loop::{Context, run_turn};
+use crate::Context;
+use crate::run_turn;
 use crate::{
     AgentError, InputItem, InputMessageContent, LlmClient, ReasoningText, Role, TextContentPart,
+    tools::ToolSpec,
 };
 use rustyline::DefaultEditor;
 use rustyline::error::ReadlineError;
@@ -47,6 +49,10 @@ pub async fn repl() -> Result<(), AgentError> {
                 print_input_items(items);
                 continue;
             },
+            "/tools" => {
+                print_tools(&ctx.tool_specs);
+                continue;
+            },
             "/calls" => {
                 let calls_and_outputs = ctx
                     .history
@@ -69,6 +75,7 @@ pub async fn repl() -> Result<(), AgentError> {
         }
 
         let checkpoint = ctx.history.len();
+
         ctx.history.push(InputItem::Message {
             role: Role::User,
             content: InputMessageContent::Text(input.to_string()),
@@ -85,6 +92,16 @@ pub async fn repl() -> Result<(), AgentError> {
 
 fn print_error(msg: &str) {
     eprintln!("{} {} : {}", "✗".red().bold(), "error".red().bold(), msg);
+}
+
+fn print_tools(specs: &[ToolSpec]) {
+    let mut specs = specs.iter().collect::<Vec<&ToolSpec>>();
+    specs.sort_by_key(|spec| spec.name);
+    let width = specs.iter().map(|spec| spec.name.len()).max().unwrap_or(0);
+    for spec in specs {
+        let name = format!("{:<width$}", spec.name.cyan().bold());
+        println!("{} {} {}", "tool".bright_black(), name, spec.snippet.dimmed());
+    }
 }
 
 fn print_input_items(items: &[&InputItem]) {

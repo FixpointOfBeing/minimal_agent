@@ -2,21 +2,27 @@ use std::collections::HashMap;
 
 pub mod read;
 pub use read::ReadTool;
+pub mod write;
 use serde_json::Value;
+pub use write::WriteTool;
 
-use crate::agent_loop::Context;
+use crate::Context;
 
 pub struct ToolRegistry {
     tools: HashMap<String, Tool>,
 }
 
 impl ToolRegistry {
+    fn tools() -> Vec<Tool> {
+        vec![Tool::Read(ReadTool {}), Tool::Write(WriteTool {})]
+    }
+
     pub fn new() -> Self {
-        let mut tools = HashMap::new();
-        for tool in vec![Tool::Read(ReadTool {})] {
-            tools.insert(tool.spec().name.to_string(), tool);
+        let mut tools_map = HashMap::new();
+        for tool in Self::tools() {
+            tools_map.insert(tool.spec().name.to_string(), tool);
         }
-        ToolRegistry { tools }
+        ToolRegistry { tools: tools_map }
     }
 
     pub fn tool_specs(&self) -> Vec<ToolSpec> {
@@ -30,6 +36,7 @@ impl ToolRegistry {
 
 pub enum Tool {
     Read(ReadTool),
+    Write(WriteTool),
 }
 #[derive(Clone, Debug)]
 pub struct Call {
@@ -42,12 +49,14 @@ impl Tool {
     pub fn spec(&self) -> ToolSpec {
         match self {
             Tool::Read(read_tool) => read_tool.spec(),
+            Tool::Write(write_tool) => write_tool.spec(),
         }
     }
 
     pub async fn execute(&self, ctx: &Context, call: Call) -> ToolOutput {
         match self {
             Tool::Read(read_tool) => read_tool.execute(ctx, call).await,
+            Tool::Write(write_tool) => write_tool.execute(ctx, call).await,
         }
     }
 }

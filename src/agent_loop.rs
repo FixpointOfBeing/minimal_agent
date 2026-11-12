@@ -1,14 +1,12 @@
-use std::{env, path::PathBuf};
 
 use std::io;
 use std::io::Write;
 
 use crate::{
-    AgentError, Config, Input, InputItem, InputMessageContent, LlmClient, Payload, Reasoning,
-    ResponseStatus, Role, StreamEventKind, StreamEventResponse,
-    api::{StreamEvent, ToolDefinition},
-    prompt::build_system_prompt,
-    tools::{Call, ToolOutput, ToolRegistry, ToolSpec},
+    AgentError, Input, InputItem, LlmClient, Payload, Reasoning,
+    ResponseStatus, StreamEventKind, StreamEventResponse,
+    api::{StreamEvent, ToolDefinition},Context,
+    tools::{Call, ToolOutput, ToolSpec},
 };
 
 use futures_util::StreamExt;
@@ -18,15 +16,6 @@ use serde_json::json;
 
 /// Hard cap on model requests per turn, to break runaway tool loops.
 pub const MAX_TOOL_ROUNDS: usize = 20;
-
-pub struct Context {
-    pub cwd: PathBuf,
-    pub config: Config,
-    pub registry: ToolRegistry,
-    pub history: Vec<InputItem>,
-    pub system_prompt: String,
-    pub tool_specs: Vec<ToolSpec>,
-}
 
 fn tool_specs_to_defs(tool_specs: &[ToolSpec]) -> Vec<ToolDefinition> {
     tool_specs
@@ -39,21 +28,7 @@ fn tool_specs_to_defs(tool_specs: &[ToolSpec]) -> Vec<ToolDefinition> {
         .collect()
 }
 
-impl Context {
-    pub fn new() -> Result<Context, AgentError> {
-        match env::current_dir() {
-            Ok(cwd) => {
-                let registry = ToolRegistry::new();
-                let tool_specs = registry.tool_specs();
-                let system_prompt = build_system_prompt(&cwd, &tool_specs);
-                let config = Config::new()?;
-                let history = vec![];
-                Ok(Context { cwd, config, registry, system_prompt, history, tool_specs })
-            },
-            Err(_) => Err(AgentError::new("failed to get the current working directory")),
-        }
-    }
-}
+
 pub async fn run_turn(client: &LlmClient, ctx: &mut Context) -> Result<Vec<InputItem>, AgentError> {
     let mut round = 0usize;
     let tool_defs = tool_specs_to_defs(&ctx.tool_specs);
